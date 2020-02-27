@@ -1,6 +1,7 @@
 use ansi_escapes::*;
 
 use std::convert::TryInto;
+use std::fmt::Display;
 use std::io::Write;
 use std::net::*;
 use std::sync::{Arc, Mutex};
@@ -11,7 +12,40 @@ const TICK: Duration = Duration::from_millis(100);
 
 const DIMS: (i16, i16) = (23, 80);
 
-fn demo(clients: Arc<Mutex<Vec<TcpStream>>>) {
+type Clients = Arc<Mutex<Vec<TcpStream>>>;
+
+fn display<D>(clients: &Clients, esc: D, ball: char, flush: bool)
+    where D: Display
+{
+    let mut clients = clients.lock().unwrap();
+    let mut fails = Vec::new();
+    for (i, out) in clients.iter_mut().enumerate() {
+        match write!(out, "{}{}", esc, ball) {
+            Ok(_) => (),
+            Err(e) => {
+                eprintln!("{}", e);
+                fails.push(i);
+                continue;
+            }
+        }
+        if flush {
+            out.flush().unwrap_or_else(|e| {
+                eprintln!("{}", e);
+                fails.push(i);
+            });
+        }
+    }
+    if !fails.is_empty() {
+        let mut n = clients.len();
+        for i in fails.into_iter().rev() {
+            n -= 1;
+            clients.swap(i, n);
+            clients.pop().unwrap();
+        }
+    }
+}
+
+fn demo(clients: Clients) {
     let mut x = 1;
     let mut y = 1;
     let mut dx = 1;
@@ -19,14 +53,9 @@ fn demo(clients: Arc<Mutex<Vec<TcpStream>>>) {
     loop {
         let cx = x.try_into().unwrap();
         let cy = y.try_into().unwrap();
-        for out in clients.lock().unwrap().iter_mut() {
-            write!(out, "{}*", CursorTo::AbsoluteXY(cx, cy)).unwrap();
-            out.flush().unwrap();
-        }
+        display(&clients, CursorTo::AbsoluteXY(cx, cy), '*', true);
         sleep(TICK);
-        for out in clients.lock().unwrap().iter_mut() {
-            write!(out, "{} ", CursorTo::AbsoluteXY(cx, cy)).unwrap();
-        }
+        display(&clients, CursorTo::AbsoluteXY(cx, cy), ' ', false);
         x += dx;
         y += dy;
         if x <= 0 || x >= DIMS.0 {
