@@ -12,12 +12,11 @@ const TICK: Duration = Duration::from_millis(100);
 
 const DIMS: (i16, i16) = (23, 80);
 
-type Clients = Arc<Mutex<Vec<TcpStream>>>;
+type Clients = Vec<TcpStream>;
 
-fn display<D>(clients: &Clients, esc: D, ball: char, flush: bool)
+fn display<D>(clients: &mut Clients, esc: D, ball: char, flush: bool)
     where D: Display
 {
-    let mut clients = clients.lock().unwrap();
     let mut fails = Vec::new();
     for (i, out) in clients.iter_mut().enumerate() {
         match write!(out, "{}{}", esc, ball) {
@@ -45,17 +44,17 @@ fn display<D>(clients: &Clients, esc: D, ball: char, flush: bool)
     }
 }
 
-fn demo(clients: Clients) {
+fn demo(clients: Arc<Mutex<Clients>>) {
     let mut x = 1;
     let mut y = 1;
     let mut dx = 1;
     let mut dy = 1;
+    let mut cx = x.try_into().unwrap();
+    let mut cy = y.try_into().unwrap();
     loop {
-        let cx = x.try_into().unwrap();
-        let cy = y.try_into().unwrap();
-        display(&clients, CursorTo::AbsoluteXY(cx, cy), '*', true);
         sleep(TICK);
-        display(&clients, CursorTo::AbsoluteXY(cx, cy), ' ', false);
+        let mut clients = clients.lock().unwrap();
+        display(&mut clients, CursorTo::AbsoluteXY(cx, cy), ' ', false);
         x += dx;
         y += dy;
         if x <= 0 || x >= DIMS.0 {
@@ -64,6 +63,9 @@ fn demo(clients: Clients) {
         if y <= 0 || y >= DIMS.1 {
             dy = -dy;
         }
+        cx = x.try_into().unwrap();
+        cy = y.try_into().unwrap();
+        display(&mut clients, CursorTo::AbsoluteXY(cx, cy), '*', true);
     }
 }
 
