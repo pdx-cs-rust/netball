@@ -1,5 +1,6 @@
 use ansi_escapes::*;
 use bus::Bus;
+use netdoor::NetDoor;
 
 use std::fmt::Display;
 use std::io::Write;
@@ -10,50 +11,69 @@ use std::time::Duration;
 
 const TICK: Duration = Duration::from_millis(100);
 
-const DIMS: (i16, i16) = (23, 80);
+type Coord = (f64, f64);
 
-type Coord = (u16, u16);
-
-fn display<T: Write, D>(out: &mut T, esc: D, ball: char, flush: bool)
+fn display<D>(out: &mut NetDoor, esc: D, ball: char, flush: bool)
                         -> Result<(), Box<dyn std::error::Error>>
     where D: Display
 {
-    write!(out, "{}{}", esc, ball)?;
+    out.write(format!("{}{}", esc, ball).as_bytes())?;
     if flush {
             out.flush()?;
     }
     Ok(())
 }
 
-fn client<W: Write>(mut r: bus::BusReader<Coord>, mut s: W)
+fn client(mut r: bus::BusReader<Coord>, s: TcpStream)
           -> Result<(), Box<dyn std::error::Error>>
 {
+    let mut door = NetDoor::connect(s, None);
+    let (width, height) = if let Ok(true) = door.negotiate_winsize() {
+        (door.width.unwrap(), door.height.unwrap())
+    } else {
+        (80, 23)
+    };
+
     let mut x0 = 0;
     let mut y0 = 0;
     loop {
         let (x, y) = r.recv()?;
-        display(&mut s, CursorTo::AbsoluteXY(x0, y0), ' ', true)?;
-        display(&mut s, CursorTo::AbsoluteXY(x, y), '*', false)?;
+        let x = (x * width as f64 + 0.5).floor() as u16;
+        let y = (y * height as f64 + 0.5).floor() as u16;
+        display(&mut door, CursorTo::AbsoluteXY(y0, x0), ' ', true)?;
+        display(&mut door, CursorTo::AbsoluteXY(y, x), '*', false)?;
         x0 = x;
         y0 = y;
     }
 }
 
 fn demo(s: Arc<Mutex<Bus<Coord>>>) {
-    let mut x = 1;
-    let mut y = 1;
-    let mut dx = 1;
-    let mut dy = 1;
+    let mut x = 0.0;
+    let mut y = 0.0;
+    let mut dx = 0.07;
+    let mut dy = 0.03;
     loop {
         sleep(TICK);
         let mut s = s.lock().unwrap();
-        let _ = s.try_broadcast((x as u16, y as u16));
+        let _ = s.try_broadcast((x, y));
         x += dx;
         y += dy;
-        if x <= 0 || x >= DIMS.0 {
+        if x <= 0.0 {
+            x = 0.0;
+        }
+        if x >= 1.0 {
+            x = 1.0;
+        }
+        if y <= 0.0 {
+            y = 0.0;
+        }
+        if y >= 1.0 {
+            y = 1.0;
+        }
+        if x <= 0.0 || x >= 1.0 {
             dx = -dx;
         }
-        if y <= 0 || y >= DIMS.1 {
+        if y <= 0.0 || y >= 1.0 {
             dy = -dy;
         }
     }

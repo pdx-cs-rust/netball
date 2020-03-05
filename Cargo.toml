@@ -7,3 +7,7 @@ edition = "2018"
 [dependencies]
 ansi-escapes = "0.1.0"
 bus = "2.2.2"
+
+[dependencies.netdoor]
+version = "0.1.0"
+git = "http://github.com/pdx-cs-rust/netdoor"
