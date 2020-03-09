@@ -2,8 +2,8 @@ use ansi_escapes::*;
 
 use async_std::{
     future::Future,
+    net::{TcpListener, TcpStream},
     prelude::*,
-    net::{TcpStream, TcpListener},
     task,
 };
 use broadcaster::BroadcastChannel;
@@ -28,9 +28,13 @@ where
     })
 }
 
-async fn client(mut r: BroadcastChannel<Coord>, mut s: TcpStream) -> Result<()> {
+async fn client(
+    mut r: BroadcastChannel<Coord>,
+    mut s: TcpStream,
+) -> Result<()> {
     let (width, height) = (80, 23);
-    s.write(format!("{}{}", ClearScreen, CursorHide).as_bytes()).await?;
+    s.write(format!("{}{}", ClearScreen, CursorHide).as_bytes())
+        .await?;
     s.flush().await?;
 
     let mut x0 = 0;
@@ -38,8 +42,12 @@ async fn client(mut r: BroadcastChannel<Coord>, mut s: TcpStream) -> Result<()> 
     let mut x = x0;
     let mut y = y0;
     loop {
-        s.write(format!("{} ", CursorTo::AbsoluteXY(y0, x0)).as_bytes()).await?;
-        s.write(format!("{}*", CursorTo::AbsoluteXY(y, x)).as_bytes()).await?;
+        s.write(
+            format!("{} ", CursorTo::AbsoluteXY(y0, x0)).as_bytes(),
+        )
+        .await?;
+        s.write(format!("{}*", CursorTo::AbsoluteXY(y, x)).as_bytes())
+            .await?;
         s.flush().await?;
         x0 = x;
         y0 = y;
