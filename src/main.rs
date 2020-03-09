@@ -1,16 +1,9 @@
 use ansi_escapes::*;
-use netdoor::NetDoor;
-
-use std::{
-    io::Write,
-    net::TcpStream,
-    os::unix::io::FromRawFd,
-};
 
 use async_std::{
     future::Future,
-    net::TcpListener,
-    os::unix::io::IntoRawFd,
+    prelude::*,
+    net::{TcpStream, TcpListener},
     task,
 };
 use broadcaster::BroadcastChannel;
@@ -36,26 +29,18 @@ where
 }
 
 async fn client(mut r: BroadcastChannel<Coord>, mut s: TcpStream) -> Result<()> {
-    let (width, height) = {
-        let mut door = NetDoor::connect(s.try_clone()?, None);
-        if let Ok(true) = door.negotiate_winsize() {
-            (door.width.unwrap(), door.height.unwrap())
-        } else {
-            (80, 23)
-        }
-    };
-
-    s.write(format!("{}{}", ClearScreen, CursorHide).as_bytes())?;
-    s.flush()?;
+    let (width, height) = (80, 23);
+    s.write(format!("{}{}", ClearScreen, CursorHide).as_bytes()).await?;
+    s.flush().await?;
 
     let mut x0 = 0;
     let mut y0 = 0;
     let mut x = x0;
     let mut y = y0;
     loop {
-        s.write(format!("{} ", CursorTo::AbsoluteXY(y0, x0)).as_bytes())?;
-        s.write(format!("{}*", CursorTo::AbsoluteXY(y, x)).as_bytes())?;
-        s.flush()?;
+        s.write(format!("{} ", CursorTo::AbsoluteXY(y0, x0)).as_bytes()).await?;
+        s.write(format!("{}*", CursorTo::AbsoluteXY(y, x)).as_bytes()).await?;
+        s.flush().await?;
         x0 = x;
         y0 = y;
         let (nx, ny) = r.next().await.unwrap();
@@ -104,11 +89,6 @@ async fn accept_loop() -> Result<()> {
     while let Some(socket) = incoming.next().await {
         let socket = socket?;
         let addr = socket.peer_addr()?;
-        let fd = socket.clone().into_raw_fd();
-        eprintln!("fd: {}", fd);
-        let socket = unsafe {
-            std::net::TcpStream::from_raw_fd(fd)
-        };
         eprintln!("new client: {:?}", addr);
         spawn_and_log_error(client(bus.clone(), socket));
     }
