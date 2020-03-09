@@ -7,6 +7,10 @@ edition = "2018"
 [dependencies]
 ansi-escapes = "0.1.0"
 bus = "2.2.2"
+futures = "0.3.4"
+async-std = "1.5.0"
+broadcaster = "1.0.0"
+futures-util = "0.3.4"
 
 [dependencies.netdoor]
 version = "0.1.0"

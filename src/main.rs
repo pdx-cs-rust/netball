@@ -1,61 +1,77 @@
 use ansi_escapes::*;
-use bus::Bus;
 use netdoor::NetDoor;
 
-use std::fmt::Display;
-use std::io::Write;
-use std::net::*;
-use std::sync::{Arc, Mutex};
-use std::thread::sleep;
+use std::{
+    io::Write,
+    net::TcpStream,
+    os::unix::io::FromRawFd,
+};
+
+use async_std::{
+    future::Future,
+    net::TcpListener,
+    os::unix::io::IntoRawFd,
+    task,
+};
+use broadcaster::BroadcastChannel;
+use futures_util::StreamExt;
 use std::time::Duration;
 
 const TICK: Duration = Duration::from_millis(100);
 
 type Coord = (f64, f64);
 
-fn display<D>(out: &mut NetDoor, esc: D, ball: char, flush: bool)
-                        -> Result<(), Box<dyn std::error::Error>>
-    where D: Display
+type Result<T> =
+    std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+fn spawn_and_log_error<F>(fut: F) -> task::JoinHandle<()>
+where
+    F: Future<Output = Result<()>> + Send + 'static,
 {
-    out.write(format!("{}{}", esc, ball).as_bytes())?;
-    if flush {
-            out.flush()?;
-    }
-    Ok(())
+    task::spawn(async move {
+        if let Err(e) = fut.await {
+            eprintln!("{}", e)
+        }
+    })
 }
 
-fn client(mut r: bus::BusReader<Coord>, s: TcpStream)
-          -> Result<(), Box<dyn std::error::Error>>
-{
-    let mut door = NetDoor::connect(s, None);
-    let (width, height) = if let Ok(true) = door.negotiate_winsize() {
-        (door.width.unwrap(), door.height.unwrap())
-    } else {
-        (80, 23)
+async fn client(mut r: BroadcastChannel<Coord>, mut s: TcpStream) -> Result<()> {
+    let (width, height) = {
+        let mut door = NetDoor::connect(s.try_clone()?, None);
+        if let Ok(true) = door.negotiate_winsize() {
+            (door.width.unwrap(), door.height.unwrap())
+        } else {
+            (80, 23)
+        }
     };
+
+    s.write(format!("{}{}", ClearScreen, CursorHide).as_bytes())?;
+    s.flush()?;
 
     let mut x0 = 0;
     let mut y0 = 0;
+    let mut x = x0;
+    let mut y = y0;
     loop {
-        let (x, y) = r.recv()?;
-        let x = (x * width as f64 + 0.5).floor() as u16;
-        let y = (y * height as f64 + 0.5).floor() as u16;
-        display(&mut door, CursorTo::AbsoluteXY(y0, x0), ' ', true)?;
-        display(&mut door, CursorTo::AbsoluteXY(y, x), '*', false)?;
+        s.write(format!("{} ", CursorTo::AbsoluteXY(y0, x0)).as_bytes())?;
+        s.write(format!("{}*", CursorTo::AbsoluteXY(y, x)).as_bytes())?;
+        s.flush()?;
         x0 = x;
         y0 = y;
+        let (nx, ny) = r.next().await.unwrap();
+        x = (nx * width as f64 + 0.5).floor() as u16;
+        y = (ny * height as f64 + 0.5).floor() as u16;
     }
 }
 
-fn demo(s: Arc<Mutex<Bus<Coord>>>) {
+async fn demo(s: BroadcastChannel<Coord>) {
     let mut x = 0.0;
     let mut y = 0.0;
     let mut dx = 0.07;
     let mut dy = 0.03;
     loop {
-        sleep(TICK);
-        let mut s = s.lock().unwrap();
-        let _ = s.try_broadcast((x, y));
+        task::sleep(TICK).await;
+        let _ = s.send(&(x, y)).await;
         x += dx;
         y += dy;
         if x <= 0.0 {
@@ -79,29 +95,26 @@ fn demo(s: Arc<Mutex<Bus<Coord>>>) {
     }
 }
 
-fn main() {
-    let listener = TcpListener::bind("127.0.0.1:13000").unwrap();
-    let bus = Arc::new(Mutex::new(Bus::new(5)));
+async fn accept_loop() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:13000").await?;
+    let bus = BroadcastChannel::new();
     let s = bus.clone();
-    let _ = std::thread::spawn(move || {
-        demo(s);
-    });
-    loop {
-        match listener.accept() {
-            Ok((mut socket, addr)) => {
-                println!("new client: {:?}", addr);
-                write!(socket, "{}{}", ClearScreen, CursorHide).unwrap();
-                socket.flush().unwrap();
-                let r = bus.lock().unwrap().add_rx();
-                let _ = std::thread::spawn(move || {
-                    client(r, socket).unwrap_or_else(|e| {
-                        eprintln!("{:?}: {}", addr, e);
-                    });
-                });
-            }
-            Err(e) => {
-                println!("couldn't get client: {:?}", e);
-            }
-        }
+    let _ = task::spawn(demo(s));
+    let mut incoming = listener.incoming();
+    while let Some(socket) = incoming.next().await {
+        let socket = socket?;
+        let addr = socket.peer_addr()?;
+        let fd = socket.clone().into_raw_fd();
+        eprintln!("fd: {}", fd);
+        let socket = unsafe {
+            std::net::TcpStream::from_raw_fd(fd)
+        };
+        eprintln!("new client: {:?}", addr);
+        spawn_and_log_error(client(bus.clone(), socket));
     }
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    task::block_on(accept_loop())
 }
